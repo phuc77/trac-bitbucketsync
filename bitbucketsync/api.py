@@ -61,7 +61,7 @@ class GitCore(object):
         return partial(self.__execute, name.replace('_','-'))
 
     def fetch(self):
-        p = self.__pipe('fetch', '--verbose', stderr=PIPE)
+        p = self.__pipe('fetch', '--verbose', 'origin', stderr=PIPE)
 
         stdout_data, stderr_data = p.communicate()
 
