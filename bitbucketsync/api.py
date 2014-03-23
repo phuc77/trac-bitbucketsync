@@ -123,21 +123,34 @@ class BitbucketSync(Component):
     def process_request(self, req):
         """Process the request."""
 
-        payload = json.loads(req.args.get('payload'))
-        repository = payload.get('repository', {})
-        name = repository.get('name')
-        kind = repository.get('scm')
-
-        if not repository:
-            self.env.log.error('BitbucketSync: Invalid POST payload, no repository slug')
-        elif not name:
-            self.env.log.error('BitbucketSync: Invalid POST payload, no repository name')
-        elif not kind:
-            self.env.log.error('BitbucketSync: Invalid POST payload, no repository kind')
+        payload = req.args.get('payload')
+        if payload is None:
+            self.env.log.error('BitbucketSync: Invalid POST, no payload')
         else:
-            self.env.log.debug('BitbucketSync: Got POST request for repository "%s" (%s)',
-                               name, kind)
-            self._process_repository(name, kind)
+            try:
+                payload = json.loads(payload)
+            except:
+                self.env.log.error('BitbucketSync: Invalid POST payload')
+            else:
+                repository = payload.get('repository', {})
+                absurl = repository.get('absolute_url')
+                name = repository.get('name')
+                kind = repository.get('scm')
+
+                if not repository:
+                    self.env.log.error(
+                        'BitbucketSync: Invalid POST payload, no repository slug')
+                elif not name:
+                    self.env.log.error(
+                        'BitbucketSync: Invalid POST payload, no repository name')
+                elif not kind:
+                    self.env.log.error(
+                        'BitbucketSync: Invalid POST payload, no repository kind')
+                else:
+                    self.env.log.debug(
+                        'BitbucketSync: Got POST request from repository %s',
+                        absurl)
+                    self._process_repository(name, kind, absurl)
 
         req.send_response(200)
         req.send_header('Content-Type', 'text/plain')
@@ -146,13 +159,43 @@ class BitbucketSync(Component):
 
         raise RequestDone
 
-    def _process_repository(self, name, kind):
+    def _process_repository(self, name, kind, absurl):
         rm = RepositoryManager(self.env)
-        repo = rm.get_repository(name)
-        if kind == 'hg':
+        repo = self._find_repository(rm, name, kind, absurl)
+        if repo is None:
+            self.env.log.warn('BitbucketSync: Cannot find a %s repository named "%s"'
+                              ' and origin "%s"' % (kind, name, absurl))
+        elif kind == 'hg':
             self._process_hg_repository(rm, repo)
-        elif kind == 'git':
+        else: #elif kind == 'git':
             self._process_git_repository(rm, repo)
+
+    def _find_repository(self, manager, name, kind, origin):
+        repo = manager.get_repository(name)
+        if repo is None:
+            if kind == 'hg':
+                check_absurl = self._check_hg_origin
+            else: #elif kind == 'git':
+                check_absurl = self._check_git_origin
+
+            for repo in manager.get_real_repositories():
+                if check_absurl(repo, origin):
+                    break
+            else:
+                repo = None
+        return repo
+
+    def _check_hg_origin(self, repo, origin):
+        raise NotImplementedError()
+
+    def _check_git_origin(self, repo, origin):
+        git = repo.git.repo
+        bburl = 'https://bitbucket.org' + origin
+        for remote in git.remote('--verbose').splitlines():
+            name, url = remote.split('\t')
+            if name == 'origin' and url.startswith(bburl):
+                return True
+        return False
 
     def _process_git_repository(self, manager, repo):
         path = repo.gitrepo
@@ -160,9 +203,10 @@ class BitbucketSync(Component):
         self.env.log.debug('BitbucketSync: Executing a fetch inside "%s"', path)
         hashes = git.fetch()
         if hashes:
-            self.env.log.debug('BitbucketSync: Added %d new changesets from "%s"',
-                               len(hashes), path)
             manager.notify('changeset_added', repo.reponame, hashes)
+            self.env.log.debug('BitbucketSync: Added %d new changesets', len(hashes))
+        else:
+            self.env.log.debug('BitbucketSync: No new changeset')
 
     def _process_hg_repository(self, manager, repo):
         from mercurial import commands
