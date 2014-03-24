@@ -1,12 +1,12 @@
+from functools import partial
 import json
+from subprocess import Popen, PIPE
+import sys
 
 from trac.core import Component, implements
 from trac.web import IRequestHandler, IRequestFilter, RequestDone
 from trac.versioncontrol import RepositoryManager
 
-from functools import partial
-from subprocess import Popen, PIPE
-import sys
 
 # This is a slightly modified version of tracopt.versioncontrol.git.PyGIT.GitCore
 # that unfortunately does not return git stderr, and ``git fetch --verbose`` writes
