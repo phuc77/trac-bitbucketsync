@@ -60,8 +60,8 @@ class GitCore(object):
             raise AttributeError, name
         return partial(self.__execute, name.replace('_','-'))
 
-    def fetch(self):
-        p = self.__pipe('fetch', '--verbose', 'origin', stderr=PIPE)
+    def fetch(self, remote='origin'):
+        p = self.__pipe('fetch', '--verbose', remote, stderr=PIPE)
 
         stdout_data, stderr_data = p.communicate()
 
@@ -161,54 +161,54 @@ class BitbucketSync(Component):
 
     def _process_repository(self, name, kind, absurl):
         rm = RepositoryManager(self.env)
-        repo = self._find_repository(rm, name, kind, absurl)
+        repo, remote = self._find_repository(rm, name, kind, absurl)
         if repo is None:
             self.env.log.warn('BitbucketSync: Cannot find a %s repository named "%s"'
                               ' and origin "%s"' % (kind, name, absurl))
         elif kind == 'hg':
-            self._process_hg_repository(rm, repo)
+            self._process_hg_repository(rm, repo, remote)
         else: #elif kind == 'git':
-            self._process_git_repository(rm, repo)
+            self._process_git_repository(rm, repo, remote)
 
     def _find_repository(self, manager, name, kind, origin):
-        repo = manager.get_repository(name)
-        if repo is None:
-            if kind == 'hg':
-                check_absurl = self._check_hg_origin
-            else: #elif kind == 'git':
-                check_absurl = self._check_git_origin
+        if kind == 'hg':
+            check_absurl = self._find_hg_remote
+        else: #elif kind == 'git':
+            check_absurl = self._find_git_remote
 
-            for repo in manager.get_real_repositories():
-                if check_absurl(repo, origin):
-                    break
-            else:
-                repo = None
-        return repo
+        for repo in manager.get_real_repositories():
+            remote = check_absurl(repo, origin)
+            if remote is not None:
+                return repo, remote
 
-    def _check_hg_origin(self, repo, origin):
+        return None, None
+
+    def _find_hg_remote(self, repo, origin):
+        # Should use "hg paths" to find the right remote
         raise NotImplementedError()
 
-    def _check_git_origin(self, repo, origin):
+    def _find_git_remote(self, repo, origin):
         git = repo.git.repo
         bburl = 'https://bitbucket.org' + origin
         for remote in git.remote('--verbose').splitlines():
             name, url = remote.split('\t')
-            if name == 'origin' and url.startswith(bburl):
-                return True
-        return False
+            if url.startswith(bburl):
+                return name
+        return None
 
-    def _process_git_repository(self, manager, repo):
+    def _process_git_repository(self, manager, repo, remote):
         path = repo.gitrepo
         git = GitCore(path) # repo.git.repo
-        self.env.log.debug('BitbucketSync: Executing a fetch inside "%s"', path)
-        hashes = git.fetch()
+        self.env.log.debug('BitbucketSync: Executing a fetch from "%s" inside "%s"',
+                           remote, path)
+        hashes = git.fetch(remote)
         if hashes:
             manager.notify('changeset_added', repo.reponame, hashes)
             self.env.log.debug('BitbucketSync: Added %d new changesets', len(hashes))
         else:
             self.env.log.debug('BitbucketSync: No new changeset')
 
-    def _process_hg_repository(self, manager, repo):
+    def _process_hg_repository(self, manager, repo, remote):
         from mercurial import commands
 
         path = repo.path
