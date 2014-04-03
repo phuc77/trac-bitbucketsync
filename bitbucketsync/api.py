@@ -189,11 +189,20 @@ class BitbucketSync(Component):
 
     def _find_git_remote(self, repo, origin):
         git = repo.git.repo
-        https_bburl = 'https://bitbucket.org' + origin
-        git_bburl = 'git@bitbucket.org:' + origin[1:] # remove leading slash
+        if origin.startswith('/'):
+            origin = origin[1:]
+        if origin.endswith('/'):
+            origin = origin[:-1]
+        if not origin.endswith('.git'):
+            origin += '.git'
+        https_bburl = 'https://bitbucket.org/' + origin
+        git_bburl = 'git@bitbucket.org:' + origin
         for remote in git.remote('--verbose').splitlines():
             name, url = remote.split('\t')
-            if url.startswith(https_bburl) or url.startswith(git_bburl):
+            url = url.split()[0]
+            if (url == https_bburl
+                or url == git_bburl
+                or url.startswith('https://') and url.endswith(https_bburl[8:])):
                 return name
         return None
 
