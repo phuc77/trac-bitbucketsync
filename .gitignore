@@ -2,3 +2,7 @@
 /build
 *.egg-info
 *.pyc
+
+# Eclipse generated files and folders
+.project
+.pydevproject

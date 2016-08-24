@@ -30,6 +30,8 @@ class GitCore(object):
         cmd = [self.__git_bin]
         if self.__git_dir:
             cmd.append('--git-dir')
+            cmd.append('%s/.git' % self.__git_dir)
+            cmd.append('--work-tree')
             cmd.append(self.__git_dir)
         cmd.append(gitcmd)
         cmd.extend(args)
@@ -123,7 +125,7 @@ class BitbucketSync(Component):
     def process_request(self, req):
         """Process the request."""
 
-        payload = req.args.get('payload')
+        payload = req.args.get('payload') if len(req.args) > 0 else req.read()
         if payload is None:
             self.env.log.error('BitbucketSync: Invalid POST, no payload')
         else:
@@ -133,7 +135,7 @@ class BitbucketSync(Component):
                 self.env.log.error('BitbucketSync: Invalid POST payload')
             else:
                 repository = payload.get('repository', {})
-                absurl = repository.get('absolute_url')
+                absurl = repository.get('absolute_url') if 'absolute_url' in repository else repository.get('full_name')
                 name = repository.get('name')
                 kind = repository.get('scm')
 
