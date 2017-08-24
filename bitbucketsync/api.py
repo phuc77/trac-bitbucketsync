@@ -62,7 +62,7 @@ class GitCore(object):
             raise AttributeError, name
         return partial(self.__execute, name.replace('_','-'))
 
-    def fetch(self, remote='origin'):
+    def fetch(self, logger, remote='origin'):
         p = self.__pipe('fetch', '--verbose', remote, stderr=PIPE)
 
         stdout_data, stderr_data = p.communicate()
@@ -70,23 +70,25 @@ class GitCore(object):
         seen = set()
         hashes = []
 
-        lines = stderr_data.splitlines()
+        try:
+            lines = stderr_data.splitlines()
 
-        # drop first line, 'From /path/to/original/repo'
-        lines.pop(0)
+            # drop first line, 'From /path/to/original/repo'
+            lines.pop(0)
 
-        for line in lines:
-            if line.startswith(' = '):
-                # up-to-date branch, ' = [up to date]      master     -> master'
-                continue
-            hash_range = line.split()[0]
-            if not '..' in hash_range:
-                continue
-            for hash in self.rev_list('--reverse', hash_range)[0].splitlines():
-                if not hash in seen:
-                    seen.add(hash)
-                    hashes.append(hash)
-
+            for line in lines:
+                if line.startswith(' = '):
+                    # up-to-date branch, ' = [up to date]      master     -> master'
+                    continue
+                hash_range = line.split()[0]
+                if not '..' in hash_range:
+                    continue
+                for hash in self.rev_list('--reverse', hash_range)[0].splitlines():
+                    if not hash in seen:
+                        seen.add(hash)
+                        hashes.append(hash)
+        except IndexError:
+            logger.error('BitbucketSync: stderr: %s', stderr_data);
         return hashes
 
 
@@ -150,8 +152,8 @@ class BitbucketSync(Component):
                         'BitbucketSync: Invalid POST payload, no repository kind')
                 else:
                     self.env.log.debug(
-                        'BitbucketSync: Got POST request from repository %s',
-                        absurl)
+                        'BitbucketSync: Got POST request from %s repository %s',
+                        kind, absurl)
                     self._process_repository(name, kind, absurl)
 
         req.send_response(200)
@@ -190,22 +192,26 @@ class BitbucketSync(Component):
         raise NotImplementedError()
 
     def _find_git_remote(self, repo, origin):
-        git = repo.git.repo
-        if origin.startswith('/'):
-            origin = origin[1:]
-        if origin.endswith('/'):
-            origin = origin[:-1]
-        if not origin.endswith('.git'):
-            origin += '.git'
-        https_bburl = 'https://bitbucket.org/' + origin
-        git_bburl = 'git@bitbucket.org:' + origin
-        for remote in git.remote('--verbose').splitlines():
-            name, url = remote.split('\t')
-            url = url.split()[0]
-            if (url == https_bburl
-                or url == git_bburl
-                or url.startswith('https://') and url.endswith(https_bburl[8:])):
-                return name
+        try:
+            git = repo.git.repo
+            if origin.startswith('/'):
+                origin = origin[1:]
+            if origin.endswith('/'):
+                origin = origin[:-1]
+            if not origin.endswith('.git'):
+                origin += '.git'
+            https_bburl = 'https://bitbucket.org/' + origin
+            git_bburl = 'git@bitbucket.org:' + origin
+            for remote in git.remote('--verbose').splitlines():
+                name, url = remote.split('\t')
+                url = url.split()[0]
+                if (url == https_bburl
+                    or url == git_bburl
+                    or url.startswith('https://') and url.endswith(https_bburl[8:])):
+                    return name
+        except AttributeError:
+            # Safeguard against SVN repos which does not have git property
+            self.env.log.debug('BitbucketSync: Repository %s is not a git repo', repo.name)
         return None
 
     def _process_git_repository(self, manager, repo, remote):
@@ -213,7 +219,7 @@ class BitbucketSync(Component):
         git = GitCore(path) # repo.git.repo
         self.env.log.debug('BitbucketSync: Executing a fetch from "%s" inside "%s"',
                            remote, path)
-        hashes = git.fetch(remote)
+        hashes = git.fetch(self.env.log, remote)
         if hashes:
             manager.notify('changeset_added', repo.reponame, hashes)
             self.env.log.debug('BitbucketSync: Added %d new changesets', len(hashes))
