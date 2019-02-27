@@ -1,6 +1,6 @@
 ﻿# trac-bitbucketsync
 
-BitbucketSyncPlugin syncs Bitbucket repository with local repository used by Trac.
+This modified BitbucketSyncPlugin syncs Bitbucket/Gitlab repository with local Git repository used by Trac.
 
 See https://trac-hacks.org/wiki/BitbucketSyncPlugin for more info.
 
@@ -19,6 +19,17 @@ Open your repository on bitbucket.org and go to `Settings` -> `Webhooks` and cli
 https://example.com/bitbucketsync
 ```
 Replace `example.com` with your hostname!
+
+## Gitlab Webhooks
+
+Open your project on Gitlab and go to `Settings` -> `Integrations` and `Add webhook` with `Push events` ticked using URL:
+```
+https://example.com/bitbucketsync
+```
+Replace `example.com` with your hostname!
+
+If you are running Gitlab locally on same server as Trac, see document below regarding how to safeguard your webhook:
+https://docs.gitlab.com/ee/security/webhooks.html#webhooks-and-insecure-internal-web-services
 
 ## Clone your repo locally using SSH keys
 
@@ -45,6 +56,7 @@ Open your repository on bitbucket.org and go to `Settings` -> `Access keys` and 
 ```
 ssh-rsa ... www-data@example.com
 ```
+Similarily for Gitlab, add this key to a new Trac user which has access to your projects.
 
 This will allow the user running the webserver (Trac+BitbucketSyncPlugin) to fetch updates for your repos from Bitbucket whenever the webhook is triggered.
 
@@ -56,7 +68,7 @@ In this example I will use `/var/lib/git` as base directory, I assume you alread
 cd /var/lib/ && sudo mkdir git && sudo chown www-data git
 sudo su - www-data
 cd /var/lib/git
-git clone git@bitbucket.org:<team/user>/<repository>.git
+git clone git@<example.com>:<path>/<repository>.git
 ```
 
 ### Setup post-receive hook for your local git repository

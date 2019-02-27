@@ -88,7 +88,7 @@ class GitCore(object):
                         seen.add(hash)
                         hashes.append(hash)
         except IndexError:
-            logger.error('BitbucketSync: stderr: %s', stderr_data);
+            logger.error('BitbucketSync: stderr: %s', stderr_data)
         return hashes
 
 
@@ -111,7 +111,7 @@ class BitbucketSync(Component):
 
         return handler
 
-    def post_process_request(req, template, data, content_type):
+    def post_process_request(self, req, template, data, content_type):
         """Do any post-processing the request might need; typically adding
         values to the template `data` dictionary, or changing template or
         mime type."""
@@ -136,25 +136,63 @@ class BitbucketSync(Component):
             except:
                 self.env.log.error('BitbucketSync: Invalid POST payload')
             else:
+                # Bitbucket - https://confluence.atlassian.com/bitbucket/event-payloads-740262817.html#EventPayloads-Push
                 repository = payload.get('repository', {})
-                absurl = repository.get('absolute_url') if 'absolute_url' in repository else repository.get('full_name')
-                name = repository.get('name')
-                kind = repository.get('scm')
+                # Gitlab - https://docs.gitlab.com/ee/user/project/integrations/webhooks#push-events
+                project = payload.get('project', {})
 
-                if not repository:
+                if 'name' in repository:
+                    name = repository.get('name')
+                elif 'name' in project:
+                    name = project.get('name')
+
+                # Defaults to git if we cant find scm property
+                kind = repository.get('scm', 'git')
+
+                if 'full_name' in repository:
+                    # Build git_url and https_url for Bitbucket using full_name: "user/reponame"
+                    full_name = repository.get('full_name')
+                    git_url = 'git@bitbucket.org:' + full_name + '.git'
+                    https_url = 'https://bitbucket.org/' + full_name + '.git'
+                elif 'absolute_url' in repository:
+                    # Legacy support for absolute_url: "/user/reponame/"
+                    absolute_url = repository.get('absolute_url')
+                    if absolute_url.startswith('/'):
+                        absolute_url = absolute_url[1:]
+                    if absolute_url.endswith('/'):
+                        absolute_url = absolute_url[:-1]
+                    git_url = 'git@bitbucket.org:' + absolute_url + '.git'
+                    https_url = 'https://bitbucket.org/' + absolute_url + '.git'
+                    
+
+                if 'git_ssh_url' in project:
+                    # Get git_url for Gitlab
+                    git_url = project.get('git_ssh_url')
+                elif 'git_ssh_url' in repository:
+                    # Get git_url for Gitlab, legacy support
+                    git_url = repository.get('git_ssh_url')
+
+                if 'git_http_url' in project:
+                    # Get https_url for Gitlab
+                    https_url = project.get('git_http_url')
+                elif 'git_http_url' in repository:
+                    # Get https_url for Gitlab, legacy support
+                    https_url = repository.get('git_http_url')
+
+                if not name:
                     self.env.log.error(
-                        'BitbucketSync: Invalid POST payload, no repository slug')
-                elif not name:
+                        'BitbucketSync: Invalid POST payload, no repository/project name')
+                elif not git_url:
                     self.env.log.error(
-                        'BitbucketSync: Invalid POST payload, no repository name')
-                elif not kind:
+                        'BitbucketSync: Invalid POST payload, no repository/project git url')
+                elif not https_url:
                     self.env.log.error(
-                        'BitbucketSync: Invalid POST payload, no repository kind')
+                        'BitbucketSync: Invalid POST payload, no repository/project https url')
                 else:
                     self.env.log.debug(
-                        'BitbucketSync: Got POST request from %s repository %s',
-                        kind, absurl)
-                    self._process_repository(name, kind, absurl)
+                        'BitbucketSync: Got POST request from %s repository "%s" with url "%s"', 
+                        kind, name, git_url)
+                    self._process_repository(name, kind, git_url, https_url)
 
         req.send_response(200)
         req.send_header('Content-Type', 'text/plain')
@@ -163,55 +201,45 @@ class BitbucketSync(Component):
 
         raise RequestDone
 
-    def _process_repository(self, name, kind, absurl):
+    def _process_repository(self, name, kind, git_url, https_url):
         rm = RepositoryManager(self.env)
-        repo, remote = self._find_repository(rm, name, kind, absurl)
+        repo, remote = self._find_repository(rm, name, kind, git_url, https_url)
         if repo is None:
             self.env.log.warn('BitbucketSync: Cannot find a %s repository named "%s"'
-                              ' and origin "%s"' % (kind, name, absurl))
+                              ' with git url "%s" or https url "%s"' % (kind, name, git_url, https_url))
         elif kind == 'hg':
             self._process_hg_repository(rm, repo, remote)
-        else: #elif kind == 'git':
+        elif kind == 'git':
             self._process_git_repository(rm, repo, remote)
 
-    def _find_repository(self, manager, name, kind, origin):
+    def _find_repository(self, manager, name, kind, git_url, https_url):
         if kind == 'hg':
-            check_absurl = self._find_hg_remote
-        else: #elif kind == 'git':
-            check_absurl = self._find_git_remote
+            check_urls = self._find_hg_remote
+        elif kind == 'git':
+            check_urls = self._find_git_remote
 
         for repo in manager.get_real_repositories():
-            remote = check_absurl(repo, origin)
+            remote = check_urls(repo, git_url, https_url)
             if remote is not None:
                 return repo, remote
 
         return None, None
 
-    def _find_hg_remote(self, repo, origin):
+    def _find_hg_remote(self, repo, git_url, https_url):
         # Should use "hg paths" to find the right remote
         raise NotImplementedError()
 
-    def _find_git_remote(self, repo, origin):
+    def _find_git_remote(self, repo, git_url, https_url):
         try:
             git = repo.git.repo
-            if origin.startswith('/'):
-                origin = origin[1:]
-            if origin.endswith('/'):
-                origin = origin[:-1]
-            if not origin.endswith('.git'):
-                origin += '.git'
-            https_bburl = 'https://bitbucket.org/' + origin
-            git_bburl = 'git@bitbucket.org:' + origin
             for remote in git.remote('--verbose').splitlines():
                 name, url = remote.split('\t')
                 url = url.split()[0]
-                if (url == https_bburl
-                    or url == git_bburl
-                    or url.startswith('https://') and url.endswith(https_bburl[8:])):
+                if (url == git_url or url == https_url or url.startswith('https://') and url.endswith(https_url[8:])):
                     return name
         except AttributeError:
             # Safeguard against SVN repos which does not have git property
-            self.env.log.debug('BitbucketSync: Repository %s is not a git repo', repo.name)
+            self.env.log.debug('BitbucketSync: Skipping "%s" since it is not a git repo', repo.name)
         return None
 
     def _process_git_repository(self, manager, repo, remote):
@@ -222,9 +250,9 @@ class BitbucketSync(Component):
         hashes = git.fetch(self.env.log, remote)
         if hashes:
             manager.notify('changeset_added', repo.reponame, hashes)
-            self.env.log.debug('BitbucketSync: Added %d new changesets', len(hashes))
+            self.env.log.info('BitbucketSync: Added %d new changeset(s) to "%s"', len(hashes), repo.reponame)
         else:
-            self.env.log.debug('BitbucketSync: No new changeset')
+            self.env.log.info('BitbucketSync: No new changesets for "%s"', repo.reponame)
 
     def _process_hg_repository(self, manager, repo, remote):
         from mercurial import commands
